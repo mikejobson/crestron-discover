@@ -6,20 +6,30 @@ on:
       - "v*.*.*"
 
 jobs:
-  build:
+  release:
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@v4
+
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
-          go-version: "1.25.1"
+          go-version: "1.22"
+
       - name: Build binary
         run: |
-          go build -o crestron-discover
-      - name: Upload Release Asset
+          GOOS=darwin GOARCH=amd64 go build -o crestron-discover
+
+      - name: Create Release
         uses: softprops/action-gh-release@v2
         with:
           files: crestron-discover
+
+      - name: Update Homebrew Formula
+        uses: mislav/bump-homebrew-formula-action@v2
+        with:
+          formula-name: crestron-discover
+          homebrew-tap: mikejobson/homebrew-tap
+          download-url: https://github.com/mikejobson/crestron-discover/releases/download/${{ github.ref_name }}/crestron-discover
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          COMMITTER_TOKEN: ${{ secrets.HOMEBREW_TAP_GITHUB_TOKEN }}
