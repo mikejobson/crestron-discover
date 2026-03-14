@@ -2,13 +2,28 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"fmt"
 	"net"
 	"os"
 	"regexp"
 	"strings"
+	"syscall"
 	"time"
 )
+
+// enableBroadcast sets SO_BROADCAST on the socket. This is required on macOS
+// (and good practice on Linux) to send UDP packets to broadcast addresses.
+func enableBroadcast(_ string, _ string, c syscall.RawConn) error {
+	var setErr error
+	err := c.Control(func(fd uintptr) {
+		setErr = syscall.SetsockoptInt(int(fd), syscall.SOL_SOCKET, syscall.SO_BROADCAST, 1)
+	})
+	if err != nil {
+		return err
+	}
+	return setErr
+}
 
 func main() {
 	const (
@@ -47,41 +62,35 @@ func main() {
 	copy(packet[hostnameOffset:], hostnameBytes)
 	// The rest is already zero-padded
 
-	// Send the packet
-	addr := &net.UDPAddr{
+	// Bind a single UDP socket with SO_BROADCAST before sending so that:
+	//   1. We don't miss replies that arrive before a separate listener is ready.
+	//   2. The source port is 41794, so Crestron devices reply to the correct port.
+	//   3. SO_BROADCAST is set — required on macOS to send to 255.255.255.255.
+	lc := net.ListenConfig{
+		Control: enableBroadcast,
+	}
+	pc, err := lc.ListenPacket(context.Background(), "udp4", fmt.Sprintf(":%d", port))
+	if err != nil {
+		fmt.Printf("Error binding to port %d: %v\n", port, err)
+		return
+	}
+	defer pc.Close()
+
+	listener := pc.(*net.UDPConn)
+
+	// Send the discovery broadcast from the already-bound socket.
+	broadcastAddr := &net.UDPAddr{
 		IP:   net.ParseIP(broadcastIP),
 		Port: port,
 	}
-	conn, err := net.DialUDP("udp4", nil, addr)
-	if err != nil {
-		fmt.Println("Error dialing UDP:", err)
-		return
-	}
-	defer conn.Close()
-
-	// Enable broadcast
-	if err := conn.SetWriteBuffer(packetSize); err != nil {
-		fmt.Println("Error setting write buffer:", err)
-	}
 	fmt.Printf("Sending Crestron discovery packet as hostname '%s'...\n", hostname)
-	_, err = conn.Write(packet)
+	_, err = listener.WriteTo(packet, broadcastAddr)
 	if err != nil {
 		fmt.Println("Error sending packet:", err)
 		return
 	}
 
-	// Listen for replies
-	listenAddr := &net.UDPAddr{
-		IP:   net.IPv4zero,
-		Port: port,
-	}
-	listener, err := net.ListenUDP("udp4", listenAddr)
-	if err != nil {
-		fmt.Println("Error listening for replies:", err)
-		return
-	}
-	defer listener.Close()
-
+	// Listen for replies on the same socket
 	listener.SetReadBuffer(2048)
 	listener.SetDeadline(time.Now().Add(5 * time.Second))
 	fmt.Println("Waiting for replies (5s timeout)...")

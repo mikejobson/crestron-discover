@@ -18,7 +18,9 @@ jobs:
 
       - name: Build binary
         run: |
-          GOOS=darwin GOARCH=amd64 go build -o crestron-discover
+          GOOS=darwin GOARCH=amd64 go build -o crestron-discover-amd64
+          GOOS=darwin GOARCH=arm64 go build -o crestron-discover-arm64
+          lipo -create -output crestron-discover crestron-discover-amd64 crestron-discover-arm64
 
       - name: Create Release
         uses: softprops/action-gh-release@v2
